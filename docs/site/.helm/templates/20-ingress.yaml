@@ -43,13 +43,6 @@ spec:
   - host: {{ .URL }}
     http:
       paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: deckhouse-website
-            port:
-              name: http
       - path: /images
         pathType: Prefix
         backend:
