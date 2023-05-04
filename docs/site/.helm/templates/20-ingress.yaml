@@ -26,7 +26,9 @@ metadata:
       rewrite ^/en/(.*) https://{{ $hostEn }}/$1 permanent;
       {{- include "rewrites" . | nindent 6 }}
 {{- if ne $.Values.web.env "web-production" }}
-    nginx.ingress.kubernetes.io/auth-url: http://basic-auth.kube-basic-auth.svc.cluster.local/deckhousewebsite
+    nginx.ingress.kubernetes.io/auth-signin: https://$host/dex-authenticator/sign_in
+    nginx.ingress.kubernetes.io/auth-url: https://{{ $.Chart.Name }}-{{ .Lang }}-dex-authenticator.deckhouse-{{ $.Values.web.env }}.svc.cluster.local/dex-authenticator/auth
+    nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-User,X-Auth-Request-Email
 {{- end }}
 spec:
   ingressClassName: "nginx"
