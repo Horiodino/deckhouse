@@ -78,6 +78,20 @@ spec:
             name: frontend
             port:
               name: http
+      - path: /license_request_expired.html
+        pathType: Prefix
+        backend:
+          service:
+            name: frontend
+            port:
+              name: http
+      - path: /license_request_success.html
+        pathType: Prefix
+        backend:
+          service:
+            name: frontend
+            port:
+              name: http
       - path: /includes
         pathType: Prefix
         backend:
