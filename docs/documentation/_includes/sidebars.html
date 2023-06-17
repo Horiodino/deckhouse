@@ -12,8 +12,8 @@
     {%- assign sidebar = site.data.sidebars[sidebar_tab][lang] %}
     {%- assign sidebar_title = site.data.sidebars[sidebar_tab][lang]["title"] %}
   {%- endif %}
-  <a id='tab_{{ sidebar_title | slugify: "latin" }}' href='javascript:void(0)' class='tabs__btn tabs__btn_{{ sidebar_title | slugify: "latin" }}'
-     onclick="openTabAndSaveStatus(event, 'tabs__btn_{{ sidebar_title | slugify: "latin" }}', 'tabs__content_{{ sidebar_title | slugify: "latin" }}', 'block__{{ sidebar_title | slugify: "latin" }}');" >
+  <a class='tabs__btn tabs__btn_sidebars'  href='javascript:void(0)' id='tab__sidebars_{{ sidebar_title | slugify: "latin" }}'
+     latinonclick="openTabAndSaveStatus(event, 'tabs__btn_sidebars', 'tabs__content_sidebars', 'block__sidebars_{{ sidebar_title | slugify: "" }}', 'sidebar_tab', '{{ sidebar_title | slugify: "latin" }}');" >
     {{ sidebar_title }}
   </a>
 {%- endfor %}
@@ -27,7 +27,7 @@
     {%- assign sidebar_title = site.data.sidebars[sidebar_tab][lang]["title"] %}
   {%- endif %}
 
-<div id='block__{{ sidebar_title | slugify: "latin" }}' class="tabs__content tabs__content_{{ sidebar_title | slugify: "latin" }}" markdown="1">
+<div class="tabs__content tabs__content_sidebars" id='block__sidebars_{{ sidebar_title | slugify: "latin" }}' markdown="1">
     {%- for entry in sidebar.folders %}
     {% include sidebar_entry.html entry=entry folder_entry_class="sidebar__item sidebar__item_parent" item_entry_class="sidebar__item" is_404=include.is_404 lang=lang %}
     {%- endfor %}
@@ -41,3 +41,18 @@
     </ul>
   </nav>
 </div>
+
+<!-- this highlights the active parent class in the navgoco sidebar. this is critical so that the parent expands when you're viewing a page. This must appear below the sidebar code above. Otherwise, if placed inside customscripts.js, the script runs before the sidebar code runs and the class never gets inserted.-->
+<script>
+$("li.active").parents('li').toggleClass("active");
+// document.addEventListener("DOMContentLoaded", function () {
+$(document).ready(function () {
+  let sidebar_tab = sessionStorage.getItem("sidebar_tab");
+  if (!sidebar_tab) {
+    sidebar_tab = 'deckhouse';
+  }
+  openTab(null, 'tabs__btn_sidebars', 'tabs__content_sidebars', 'block__sidebars_' + sidebar_tab);
+  $('#tab__sidebars_' + sidebar_tab).addClass('active');
+});
+
+</script>
