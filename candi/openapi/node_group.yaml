@@ -1906,6 +1906,7 @@ spec:
 
                         > **WARNING!** This parameter does nothing if CRI type is `Docker`.
                     resourceReservation:
+                      type: object
                       oneOf:
                       - properties:
                           mode:
