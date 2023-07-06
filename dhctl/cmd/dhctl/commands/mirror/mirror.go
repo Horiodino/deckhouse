@@ -41,7 +41,7 @@ const (
 	deckhouseRegistry = "registry.deckhouse.io/deckhouse"
 
 	destinationHelp = "destination for images to write (directory: 'dir:<directory>' or registry: 'docker://<registry repositroy')."
-	fromHelp        = "source directory for downloaded deckhouse images ('dir://<directory>')."
+	sourceHelp      = "source directory for downloaded deckhouse images ('dir://<directory>')."
 	// dontPullMetadataHelp = "If set, release metadata images (registry.deckhouse.io/deckhouse/(ce|ee)/release-channel:(early-access|alpha|beta|stable|rock-solid)) will not pull."
 
 )
@@ -66,9 +66,9 @@ func DefineMirrorCommand(kpApp *kingpin.Application) *kingpin.CmdClause {
 
 	cmd := kpApp.Command("mirror", "Copy images from deckhouse registry or fs directory to specified registry or fs directory.")
 
-	cmd.Arg("DESTINATION", destinationHelp).Required().SetValue(&destination)
+	cmd.Arg("DESTINATION", destinationHelp).Required().SetValue(destination)
 
-	cmd.Flag("from", fromHelp).SetValue(&source)
+	cmd.Flag("from", sourceHelp).SetValue(source)
 	// Deckhouse registry flags
 	// cmd.Flag("release", "Deckhouse release to download, if not set latest release is used.").SetValue(&mirrorRelease)
 	// cmd.Flag("edition", "Deckhouse edition to download, possible values ce|ee.").Default(eeEdition).EnumVar(&mirrorEdition, ceEdition, eeEdition)

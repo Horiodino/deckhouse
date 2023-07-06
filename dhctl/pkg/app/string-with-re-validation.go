@@ -17,14 +17,16 @@ package app
 import (
 	"fmt"
 	"regexp"
+
+	"gopkg.in/alecthomas/kingpin.v2"
 )
 
-type StringWithRegexpValidation struct {
+type stringWithRegexpValidation struct {
 	value   string
 	regexpr *regexp.Regexp
 }
 
-func (s *StringWithRegexpValidation) Set(value string) error {
+func (s *stringWithRegexpValidation) Set(value string) error {
 	if match := s.regexpr.MatchString(value); !match {
 		return fmt.Errorf("must match %s", s.regexpr)
 	}
@@ -32,12 +34,12 @@ func (s *StringWithRegexpValidation) Set(value string) error {
 	return nil
 }
 
-func (s *StringWithRegexpValidation) String() string {
+func (s *stringWithRegexpValidation) String() string {
 	return s.value
 }
 
-func NewStringWithRegexpValidation(regexpr string) StringWithRegexpValidation {
-	return StringWithRegexpValidation{
+func NewStringWithRegexpValidation(regexpr string) kingpin.Value {
+	return &stringWithRegexpValidation{
 		regexpr: regexp.MustCompile(regexpr),
 	}
 }
