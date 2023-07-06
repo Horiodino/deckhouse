@@ -442,7 +442,7 @@ mount:
 ansible:
   beforeInstall:
     - apk:
-        name: git,ca-certificates,make,gpgme,gpgme-dev
+        name: git,ca-certificates,make,gpgme-dev,btrfs-progs-dev,lvm2-dev
         update_cache: yes
     - command: rm -rf /var/cache/apk/*
 
