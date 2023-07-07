@@ -15,6 +15,7 @@
 package image
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/containers/image/v5/types"
@@ -26,13 +27,22 @@ type RegistryConfig struct {
 	authConfig   *types.DockerAuthConfig
 }
 
-func NewRegistry(registryPath string, dockerCfg *types.DockerAuthConfig) *RegistryConfig {
-	transportName, withinTransport, _ := strings.Cut(registryPath, ":")
+func NewRegistry(registryPath string, dockerCfg *types.DockerAuthConfig) (*RegistryConfig, error) {
+	transportName, withinTransport, f := strings.Cut(registryPath, ":")
+	if !f {
+		return nil, fmt.Errorf("can't find transport (dir: or docker://) for '%s'", registryPath)
+	}
 	return &RegistryConfig{
 		registryPath: withinTransport,
 		transport:    transportName,
 		authConfig:   dockerCfg,
-	}
+	}, nil
+}
+
+func (r *RegistryConfig) copy() *RegistryConfig {
+	n := new(RegistryConfig)
+	*n = *r
+	return n
 }
 
 func (r *RegistryConfig) RegistryPath() string {
@@ -45,4 +55,10 @@ func (r *RegistryConfig) RegistryTransport() string {
 
 func (r *RegistryConfig) AuthConfig() *types.DockerAuthConfig {
 	return r.authConfig
+}
+
+func (r *RegistryConfig) WithAuthConfig(cfg *types.DockerAuthConfig) *RegistryConfig {
+	n := r.copy()
+	n.authConfig = cfg
+	return n
 }

@@ -16,36 +16,43 @@ package image
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 
 	"github.com/containers/image/v5/copy"
 	"github.com/containers/image/v5/signature"
 	"github.com/containers/image/v5/types"
-	"github.com/deckhouse/deckhouse/dhctl/pkg/log"
 )
 
-func CopyImage(ctx context.Context, src, dest *ImageConfig, policyContext *signature.PolicyContext, opts ...CopyOptions) error {
-	srcRef, err := src.ImageReference()
+func CopyImage(ctx context.Context, src, dest *ImageConfig, policyContext *signature.PolicyContext, opts ...CopyOption) error {
+	srcRef, err := src.imageReference()
 	if err != nil {
 		return err
 	}
 
-	destRef, err := dest.ImageReference()
+	destRef, err := dest.imageReference()
 	if err != nil {
 		return err
 	}
 
-	copyOptions := &copy.Options{ReportWriter: os.Stdout}
+	copyOptions := &copyOptions{copyOptions: &copy.Options{ReportWriter: os.Stdout}}
 
 	opts = append(opts, withSourceAuth(src.AuthConfig()), withDestAuth(dest.AuthConfig()))
 	for _, opt := range opts {
 		opt(copyOptions)
 	}
 
-	log.InfoF("Copying %s image to %s...\n", trimRef(srcRef), trimRef(destRef))
+	msg := fmt.Sprintf("\nCopying %s image to %s...\n", trimRef(srcRef), trimRef(destRef))
+	if _, err := copyOptions.copyOptions.ReportWriter.Write([]byte(msg)); err != nil {
+		return err
+	}
 
-	_, err = copy.Image(ctx, policyContext, destRef, srcRef, copyOptions)
+	if copyOptions.dryRun {
+		return nil
+	}
+
+	_, err = copy.Image(ctx, policyContext, destRef, srcRef, copyOptions.copyOptions)
 	return err
 }
 

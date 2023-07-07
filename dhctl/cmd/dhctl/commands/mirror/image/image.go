@@ -25,6 +25,11 @@ import (
 	"github.com/containers/image/v5/types"
 )
 
+var (
+	DockerTransport = docker.Transport.Name()
+	DirTransport    = directory.Transport.Name()
+)
+
 type ImageConfig struct {
 	tag            string
 	digest         string
@@ -73,26 +78,21 @@ func (i *ImageConfig) WithTag(t string) *ImageConfig {
 	return n
 }
 
-func (i *ImageConfig) ImageReference() (types.ImageReference, error) {
+func (i *ImageConfig) imageReference() (types.ImageReference, error) {
 	imageBuilder := &strings.Builder{}
 	imageBuilder.WriteString(i.RegistryTransport())
 	imageBuilder.WriteByte(':')
 
 	switch i.RegistryTransport() {
-	case docker.Transport.Name():
-		imageBuilder.WriteString(strings.TrimRight(i.RegistryPath(), "/"))
-		if i.additionalPath != "" {
-			imageBuilder.WriteByte('/')
-			imageBuilder.WriteString(strings.Trim(i.additionalPath, "/"))
-		}
-		// https://github.com/containers/image/blob/v5.26.1/docker/docker_transport.go#L80
+	case DockerTransport:
+		imageBuilder.WriteString(i.RegistryPath())
 		if i.tag != "" && i.digest == "" {
 			imageBuilder.WriteByte(':')
 			imageBuilder.WriteString(i.tag)
 		}
 
-	case directory.Transport.Name():
-		p := filepath.Join(i.RegistryPath(), i.additionalPath)
+	case DirTransport:
+		p := i.RegistryPath()
 		if err := os.MkdirAll(p, 0o755); err != nil {
 			return nil, err
 		}
@@ -109,9 +109,10 @@ func (i *ImageConfig) ImageReference() (types.ImageReference, error) {
 
 func (i *ImageConfig) RegistryPath() string {
 	if i.registry == nil {
-		return ""
+		return strings.TrimRight(i.additionalPath, "/")
 	}
-	return i.registry.RegistryPath()
+	// This is used except of "filepath.Join" because docker transport want to registry to start with "//"
+	return strings.TrimRight(i.registry.RegistryPath(), "/") + "/" + strings.Trim(i.additionalPath, "/")
 }
 
 func (i *ImageConfig) RegistryTransport() string {

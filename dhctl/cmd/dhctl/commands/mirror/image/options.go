@@ -21,55 +21,66 @@ import (
 	"github.com/containers/image/v5/types"
 )
 
-type CopyOptions func(*copy.Options)
+type copyOptions struct {
+	copyOptions *copy.Options
+	dryRun      bool
+}
 
-func WithPreserveDigests() func(*copy.Options) {
-	return func(o *copy.Options) {
-		o.PreserveDigests = true
+type CopyOption func(*copyOptions)
+
+func WithPreserveDigests() CopyOption {
+	return func(o *copyOptions) {
+		o.copyOptions.PreserveDigests = true
 	}
 }
 
-func WithCopyAllImages() func(*copy.Options) {
-	return func(o *copy.Options) {
-		o.ImageListSelection = copy.CopyAllImages
+func WithCopyAllImages() CopyOption {
+	return func(o *copyOptions) {
+		o.copyOptions.ImageListSelection = copy.CopyAllImages
 	}
 }
 
-func WithOutput(w io.Writer) func(*copy.Options) {
-	return func(o *copy.Options) {
-		o.ReportWriter = w
+func WithOutput(w io.Writer) CopyOption {
+	return func(o *copyOptions) {
+		o.copyOptions.ReportWriter = w
 	}
 }
 
-func WithDestInsecure() func(*copy.Options) {
-	return func(o *copy.Options) {
-		if o.DestinationCtx == nil {
-			o.DestinationCtx = &types.SystemContext{}
+func WithDestInsecure() CopyOption {
+	return func(o *copyOptions) {
+		if o.copyOptions.DestinationCtx == nil {
+			o.copyOptions.DestinationCtx = &types.SystemContext{}
 		}
-		o.DestinationCtx.DockerInsecureSkipTLSVerify = types.OptionalBoolTrue
+		o.copyOptions.DestinationCtx.DockerInsecureSkipTLSVerify = types.OptionalBoolTrue
 	}
 }
 
-func withSourceAuth(cfg *types.DockerAuthConfig) func(*copy.Options) {
-	return func(o *copy.Options) {
+func withSourceAuth(cfg *types.DockerAuthConfig) CopyOption {
+	return func(o *copyOptions) {
 		if cfg == nil {
 			return
 		}
-		if o.SourceCtx == nil {
-			o.SourceCtx = &types.SystemContext{}
+		if o.copyOptions.SourceCtx == nil {
+			o.copyOptions.SourceCtx = &types.SystemContext{}
 		}
-		o.SourceCtx.DockerAuthConfig = cfg
+		o.copyOptions.SourceCtx.DockerAuthConfig = cfg
 	}
 }
 
-func withDestAuth(cfg *types.DockerAuthConfig) func(*copy.Options) {
-	return func(o *copy.Options) {
+func withDestAuth(cfg *types.DockerAuthConfig) CopyOption {
+	return func(o *copyOptions) {
 		if cfg == nil {
 			return
 		}
-		if o.DestinationCtx == nil {
-			o.DestinationCtx = &types.SystemContext{}
+		if o.copyOptions.DestinationCtx == nil {
+			o.copyOptions.DestinationCtx = &types.SystemContext{}
 		}
-		o.DestinationCtx.DockerAuthConfig = cfg
+		o.copyOptions.DestinationCtx.DockerAuthConfig = cfg
+	}
+}
+
+func WithDryRun() CopyOption {
+	return func(o *copyOptions) {
+		o.dryRun = true
 	}
 }

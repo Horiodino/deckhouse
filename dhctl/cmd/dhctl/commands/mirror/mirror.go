@@ -15,9 +15,15 @@
 package mirror
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,7 +31,6 @@ import (
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 
-	"github.com/containers/image/v5/docker"
 	"github.com/containers/image/v5/signature"
 	"github.com/containers/image/v5/types"
 	"github.com/deckhouse/deckhouse/dhctl/cmd/dhctl/commands/mirror/image"
@@ -38,23 +43,16 @@ const (
 	eeEdition = "ee"
 	ceEdition = "ce"
 
-	deckhouseRegistry = "registry.deckhouse.io/deckhouse"
-
 	destinationHelp = "destination for images to write (directory: 'dir:<directory>' or registry: 'docker://<registry repositroy')."
-	sourceHelp      = "source directory for downloaded deckhouse images ('dir://<directory>')."
-	// dontPullMetadataHelp = "If set, release metadata images (registry.deckhouse.io/deckhouse/(ce|ee)/release-channel:(early-access|alpha|beta|stable|rock-solid)) will not pull."
-
+	sourceHelp      = "source for deckhouse images ('dir://<directory>')."
 )
 
 var (
-	dockerTransport = docker.Transport.Name()
+	releaseChannels = [5]string{"alpha", "beta", "early-access", "stable", "rock-solid"}
 )
 
 func DefineMirrorCommand(kpApp *kingpin.Application) *kingpin.CmdClause {
 	var (
-		// mirrorRelease          = app.NewStringWithRegexpValidation("(v[0-9]+\\.[0-9]+)\\..+")
-		// mirrorEdition          string
-		// mirrorDontPullMetadata bool
 		licenseToken string
 
 		destination         = app.NewStringWithRegexpValidation("(dir:|docker://).+")
@@ -62,17 +60,17 @@ func DefineMirrorCommand(kpApp *kingpin.Application) *kingpin.CmdClause {
 		destinationUser     string
 		destinationPassword string
 		destinationInsecure bool
+		dryRun              bool
 	)
 
 	cmd := kpApp.Command("mirror", "Copy images from deckhouse registry or fs directory to specified registry or fs directory.")
 
 	cmd.Arg("DESTINATION", destinationHelp).Required().SetValue(destination)
+	cmd.Flag("from", sourceHelp).Default("docker://registry.deckhouse.io/deckhouse").SetValue(source)
 
-	cmd.Flag("from", sourceHelp).SetValue(source)
+	cmd.Flag("dry-run", "Run without actually copying data.").BoolVar(&dryRun)
+
 	// Deckhouse registry flags
-	// cmd.Flag("release", "Deckhouse release to download, if not set latest release is used.").SetValue(&mirrorRelease)
-	// cmd.Flag("edition", "Deckhouse edition to download, possible values ce|ee.").Default(eeEdition).EnumVar(&mirrorEdition, ceEdition, eeEdition)
-	// cmd.Flag("do-not-pull-release-metadata-images", dontPullMetadataHelp).BoolVar(&mirrorDontPullMetadata)
 	cmd.Flag("license", "License key for Deckhouse registry.").StringVar(&licenseToken)
 
 	// Destination registry flags
@@ -83,17 +81,12 @@ func DefineMirrorCommand(kpApp *kingpin.Application) *kingpin.CmdClause {
 	runFunc := func() error {
 		ctx := context.Background()
 
-		release, err := deckhouseRelease()
+		version, err := deckhouseVersion()
 		if err != nil {
 			return err
 		}
 
 		edition, err := deckhouseEdition()
-		if err != nil {
-			return err
-		}
-
-		images, err := deckhouseImages(source.String(), edition, release, licenseToken)
 		if err != nil {
 			return err
 		}
@@ -104,7 +97,7 @@ func DefineMirrorCommand(kpApp *kingpin.Application) *kingpin.CmdClause {
 		}
 		defer policyContext.Destroy()
 
-		copyOpts := []image.CopyOptions{
+		copyOpts := []image.CopyOption{
 			image.WithCopyAllImages(),
 			image.WithPreserveDigests(),
 			image.WithOutput(log.GetDefaultLogger()),
@@ -114,14 +107,26 @@ func DefineMirrorCommand(kpApp *kingpin.Application) *kingpin.CmdClause {
 			copyOpts = append(copyOpts, image.WithDestInsecure())
 		}
 
+		images, err := deckhouseImages(ctx, source.String(), edition, version, licenseToken, policyContext, copyOpts...)
+		if err != nil {
+			return err
+		}
+
+		destRegistry, err := image.NewRegistry(destination.String(), registryAuth(destinationUser, destinationPassword))
+		if err != nil {
+			return err
+		}
+
+		if dryRun {
+			copyOpts = append(copyOpts, image.WithDryRun())
+		}
+
 		// Copy images
-		destRegistry := image.NewRegistry(destination.String(), registryAuth(destinationUser, destinationPassword))
 		for _, srcImage := range images {
 			if err := copyImage(ctx, srcImage, destRegistry, policyContext, copyOpts...); err != nil {
 				return err
 			}
 		}
-
 		return nil
 	}
 
@@ -138,8 +143,8 @@ func newPolicyContext() (*signature.PolicyContext, error) {
 	})
 }
 
-func deckhouseRelease() (string, error) {
-	content, err := os.ReadFile("/deckhouse/release")
+func deckhouseVersion() (string, error) {
+	content, err := os.ReadFile("/deckhouse/version")
 	if err != nil {
 		return "", err
 	}
@@ -154,113 +159,89 @@ func deckhouseEdition() (string, error) {
 	return strings.TrimSpace(string(content)), nil
 }
 
-func deckhouseImages(sourceDir, edition, release, licenseToken string) ([]*image.ImageConfig, error) {
-	if sourceDir != "" {
-		imagesDigests, err := directoryModulesImages(sourceDir)
-		return imagesDigests, err
+func deckhouseImages(ctx context.Context, source, edition, version, licenseToken string, policyContext *signature.PolicyContext, opts ...image.CopyOption) ([]*image.ImageConfig, error) {
+	registry, err := image.NewRegistry(source, nil)
+	if err != nil {
+		return nil, err
 	}
+	switch registry.RegistryTransport() {
+	case image.DockerTransport:
+		return registryImages(ctx, registry, edition, version, licenseToken, policyContext, opts...)
+	case image.DirTransport:
+		return directoryImages(registry)
+	}
+	return nil, fmt.Errorf("no such transport for source: %s", registry.RegistryTransport())
+}
 
-	d8Auth, err := deckhouseRegistryAuth(edition, licenseToken)
+// directoryImages generates list to pull from local directory
+func directoryImages(registry *image.RegistryConfig) ([]*image.ImageConfig, error) {
+	imageDigests := make([]*image.ImageConfig, 0)
+
+	err := filepath.WalkDir(registry.RegistryPath(), func(path string, d fs.DirEntry, err error) error {
+		// All copied to dir images have this file
+		if err != nil || d.IsDir() || d.Name() != "manifest.json" {
+			return err
+		}
+
+		dirname := filepath.Dir(path)
+		// We don't check spllitted directory name, because it may not have digest
+		tag, digest, _ := strings.Cut(filepath.Base(dirname), "@")
+		additionalPaths := filepath.SplitList(dirname)
+		imageDigests = append(imageDigests, image.NewImageConfig(registry, tag, digest, additionalPaths...))
+		return filepath.SkipDir
+	})
+
+	return imageDigests, err
+}
+
+// registryImages generates list of images to pull from deckhouse registry
+func registryImages(ctx context.Context, registry *image.RegistryConfig, edition, version, licenseToken string, policyContext *signature.PolicyContext, opts ...image.CopyOption) ([]*image.ImageConfig, error) {
+	imagesDigests, err := registryModulesImages()
 	if err != nil {
 		return nil, err
 	}
 
-	d8Registry := deckhouseRegistryPath(d8Auth, edition)
-
-	imagesDigests, err := deckhouseModulesImages()
+	auth, err := deckhouseRegistryAuth(edition, licenseToken)
 	if err != nil {
 		return nil, err
 	}
+	registryWithAuth := registry.WithAuthConfig(auth)
 
-	images := make([]*image.ImageConfig, 0, len(imagesDigests)+4)
-	images = append(images, image.NewImageConfig(d8Registry, release, ""))
-	images = append(images, image.NewImageConfig(d8Registry, release, "", "install"))
-	images = append(images, image.NewImageConfig(d8Registry, release, "", "release-channel"))
+	newImage := func(tag string, digest string, additionalPaths ...string) *image.ImageConfig {
+		additionalPaths = append([]string{edition}, additionalPaths...)
+		return image.NewImageConfig(registryWithAuth, tag, digest, additionalPaths...)
+	}
+
+	images := make([]*image.ImageConfig, 0, 3+len(imagesDigests)+len(releaseChannels)*3)
+	images = append(images, newImage(version, ""), newImage(version, "", "install"))
+
 	if edition != ceEdition {
-		images = append(images, image.NewImageConfig(d8Registry, "2", "", "security", "trivy-db"))
+		images = append(images, newImage("2", "", "security", "trivy-db"))
+	}
+
+	for _, release := range releaseChannels {
+		// Check that release-channel image has similar version as used for running dhctl image
+		metaImg := newImage(release, "", "release-channel")
+		metaVersion, err := fetchReleaseMetadataDeckhouseVersion(ctx, metaImg, policyContext, opts...)
+		if err != nil {
+			return nil, err
+		}
+		if metaVersion != version {
+			continue
+		}
+
+		// Add release images because version of deckhouse is equal to release channel version
+		images = append(images, metaImg, newImage(release, ""), newImage(release, "", "install"))
 	}
 
 	for tag, digest := range imagesDigests {
-		images = append(images, image.NewImageConfig(d8Registry, tag, digest))
+		images = append(images, newImage(tag, digest))
 	}
 	return images, nil
 }
 
-func directoryModulesImages(sourceDir string) ([]*image.ImageConfig, error) {
-	registry := image.NewRegistry(sourceDir, nil)
-	files, err := os.ReadDir(registry.RegistryPath())
-	if err != nil {
-		return nil, err
-	}
-
-	imageDigestsUnique := make(map[string]*image.ImageConfig, 0)
-	for _, file := range files {
-		if err := directoryImagesRecursion(file, imageDigestsUnique, registry, ""); err != nil {
-			return nil, err
-		}
-	}
-
-	imageDigests := make([]*image.ImageConfig, 0, len(imageDigestsUnique))
-	for _, img := range imageDigestsUnique {
-		imageDigests = append(imageDigests, img)
-	}
-	return imageDigests, nil
-}
-
-func directoryImagesRecursion(original os.DirEntry, imageDigests map[string]*image.ImageConfig, registry *image.RegistryConfig, parentPaths ...string) error {
-	if !original.IsDir() {
-		return nil
-	}
-
-	newParentPaths := append(parentPaths, original.Name())
-	newPath := filepath.Join(newParentPaths...)
-	files, err := os.ReadDir(filepath.Join(registry.RegistryPath(), newPath))
-	if err != nil {
-		return err
-	}
-
-	var withDirectories bool
-	for _, file := range files {
-		if !file.IsDir() {
-			continue
-		}
-
-		withDirectories = true
-		if err := directoryImagesRecursion(file, imageDigests, registry, newParentPaths...); err != nil {
-			return err
-		}
-	}
-	if withDirectories {
-		return nil
-	}
-
-	tag, digest, _ := strings.Cut(original.Name(), "@")
-	imageDigests[newPath] = image.NewImageConfig(registry, tag, digest, parentPaths...)
-	return nil
-}
-
-func deckhouseModulesImages() (map[string]string, error) {
-	// srcImage, err := deckhouseImage(ctx, licenseToken)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// deckhouseImage, err := os.MkdirTemp("/tmp", "deckhouse_image_")
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// defer os.RemoveAll(deckhouseImage)
-
-	// destTarball := image.NewImageConfig(nil, deckhouseImage)
-	// destTarball.SetTransport("dir")
-
-	// opts := []image.CopyOptions{
-	// 	image.WithSourceSystemContext(&types.SystemContext{DockerAuthConfig: srcImage.AuthConfig()}),
-	// }
-
-	// if err := image.CopyImage(ctx, srcImage, destTarball, policyContext, opts...); err != nil {
-	// 	return nil, err
-	// }
+// registryModulesImages reads deckhouse module digests file and returns map[<module name> + Titled(<image name>)]<digest>
+func registryModulesImages() (map[string]string, error) {
 	content, err := os.ReadFile("/deckhouse/candi/images_digests.json")
 	if err != nil {
 		return nil, err
@@ -303,80 +284,107 @@ func registryAuth(username, password string) *types.DockerAuthConfig {
 	}
 }
 
-func deckhouseRegistryPath(d8Auth *types.DockerAuthConfig, paths ...string) *image.RegistryConfig {
-	paths = append([]string{deckhouseRegistry}, paths...)
-	return image.NewRegistry("docker://"+filepath.Join(paths...), d8Auth)
+// fetchReleaseMetadataDeckhouseVersion copies image to local directory and untar it's layers to find version.json and
+// returns "version" key found in it
+func fetchReleaseMetadataDeckhouseVersion(ctx context.Context, img *image.ImageConfig, policyContext *signature.PolicyContext, opts ...image.CopyOption) (string, error) {
+	dir, err := os.MkdirTemp("/tmp", "deckhouse_metadata_*")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(dir)
+
+	dirRegisry, err := image.NewRegistry("dir:"+dir, nil)
+	if err != nil {
+		return "", err
+	}
+
+	dest := img.WithNewRegistry(dirRegisry)
+	if err := image.CopyImage(ctx, img, dest, policyContext, opts...); err != nil {
+		return "", err
+	}
+
+	imageDir := filepath.Join(dest.RegistryPath(), img.Tag())
+	files, err := os.ReadDir(imageDir)
+	if err != nil {
+		return "", err
+	}
+
+	for _, file := range files {
+		contents, err := fileFromGzTarLayer(filepath.Join(imageDir, file.Name()), "version.json")
+		if errors.Is(err, io.EOF) || errors.Is(err, tar.ErrHeader) || errors.Is(err, gzip.ErrHeader) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+
+		var meta struct {
+			Version string `json:"version"`
+		}
+
+		if err := json.Unmarshal(contents, &meta); err != nil {
+			return "", err
+		}
+		return meta.Version, nil
+	}
+	return "", fmt.Errorf("metadata file not found in image from '%s' dir", dir)
 }
 
-func copyImage(ctx context.Context, srcImage *image.ImageConfig, destRegistry *image.RegistryConfig, policyContext *signature.PolicyContext, opts ...image.CopyOptions) error {
+// fileFromGzTarLayer finds finds "targetFile" in "archive" tar.gz file
+func fileFromGzTarLayer(archive, targetFile string) ([]byte, error) {
+	file, err := os.Open(archive)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	gz, err := gzip.NewReader(file)
+	if err != nil {
+		return nil, err
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err != nil {
+			return nil, err
+		}
+
+		if hdr.Name != targetFile {
+			continue
+		}
+
+		buf := bytes.NewBuffer(nil)
+		_, err = io.Copy(buf, tr)
+		return buf.Bytes(), err
+	}
+}
+
+func copyImage(ctx context.Context, srcImage *image.ImageConfig, destRegistry *image.RegistryConfig, policyContext *signature.PolicyContext, opts ...image.CopyOption) error {
 	srcImg := sourceImage(srcImage)
 	destImage := destinationImage(destRegistry, srcImage)
 	return image.CopyImage(ctx, srcImg, destImage, policyContext, opts...)
 }
 
+// sourceImage source destination image
 func sourceImage(srcImage *image.ImageConfig) *image.ImageConfig {
-	if srcImage.RegistryTransport() == dockerTransport && srcImage.Digest() != "" {
+	// https://github.com/containers/image/blob/v5.26.1/docker/docker_transport.go#L80
+	// If image has both tag and digest we want to pull it with digest
+	if srcImage.RegistryTransport() == image.DockerTransport && srcImage.Digest() != "" {
 		return srcImage.WithTag("")
 	}
 	return srcImage
 }
 
+// destinationImage prepares destination image
 func destinationImage(destRegistry *image.RegistryConfig, srcImage *image.ImageConfig) *image.ImageConfig {
 	destImage := srcImage.WithNewRegistry(destRegistry)
-	if destRegistry.RegistryTransport() == dockerTransport && srcImage.Tag() != "" {
+	// https://github.com/containers/image/blob/v5.26.1/docker/docker_transport.go#L80
+	// If image has both tag and digest we want to push it with tag (because digest will be saved)
+	// (because when pushing with digest image becames dangling in the registry)
+	if destRegistry.RegistryTransport() == image.DockerTransport && srcImage.Tag() != "" {
 		return destImage.WithDigest("")
 	}
 	return destImage
 }
-
-// func latestDeckhouseRelease(ctx context.Context) (string, error) {
-// 	client := github.NewClient(nil)
-// 	tags, _, err := client.Repositories.ListTags(ctx, "deckhouse", "deckhouse", &github.ListOptions{PerPage: 1})
-// 	if err != nil {
-// 		return "", err
-// 	}
-// 	return tags[0].GetName(), nil
-// }
-
-// func digestsFromImageDir(imageDir string) (map[string]map[string]string, error) {
-// 	files, err := os.ReadDir(imageDir)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	for _, file := range files {
-// 		digests, err := untarDigestsFileFromLayer(filepath.Join(imageDir, file.Name()))
-// 		if err == nil {
-// 			return digests, nil
-// 		}
-// 	}
-// 	return nil, fmt.Errorf("digests file not found in image from '%s' dir", imageDir)
-// }
-
-// func untarDigestsFileFromLayer(layerFile string) (map[string]map[string]string, error) {
-// 	file, err := os.Open(layerFile)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	defer file.Close()
-
-// 	buf := bytes.NewBuffer(nil)
-// 	tr := tar.NewReader(file)
-// 	for {
-// 		hdr, err := tr.Next()
-// 		if err != nil {
-// 			return nil, err
-// 		}
-
-// 		if hdr.Name == "deckhouse/modules/images_digests.json" {
-// 			break
-// 		}
-// 	}
-
-// 	if _, err := io.Copy(buf, tr); err != nil {
-// 		return nil, err
-// 	}
-
-// 	var modulesDigests map[string]map[string]string
-// 	return modulesDigests, json.Unmarshal(buf.Bytes(), &modulesDigests)
-// }
