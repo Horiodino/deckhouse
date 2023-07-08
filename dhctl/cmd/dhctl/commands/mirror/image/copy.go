@@ -56,6 +56,13 @@ func CopyImage(ctx context.Context, src, dest *ImageConfig, policyContext *signa
 	return err
 }
 
+func NewPolicyContext() (*signature.PolicyContext, error) {
+	// https://github.com/containers/skopeo/blob/v1.12.0/cmd/skopeo/main.go#L141
+	return signature.NewPolicyContext(&signature.Policy{
+		Default: signature.PolicyRequirements{signature.NewPRInsecureAcceptAnything()},
+	})
+}
+
 func trimRef(ref types.ImageReference) string {
 	return strings.TrimLeft(ref.StringWithinTransport(), "/")
 }

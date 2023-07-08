@@ -91,7 +91,7 @@ func DefineMirrorCommand(kpApp *kingpin.Application) *kingpin.CmdClause {
 			return err
 		}
 
-		policyContext, err := newPolicyContext()
+		policyContext, err := image.NewPolicyContext()
 		if err != nil {
 			return nil
 		}
@@ -134,13 +134,6 @@ func DefineMirrorCommand(kpApp *kingpin.Application) *kingpin.CmdClause {
 		return log.Process("mirror", "Copy images", runFunc)
 	})
 	return cmd
-}
-
-func newPolicyContext() (*signature.PolicyContext, error) {
-	// https://github.com/containers/skopeo/blob/v1.12.0/cmd/skopeo/main.go#L141
-	return signature.NewPolicyContext(&signature.Policy{
-		Default: signature.PolicyRequirements{signature.NewPRInsecureAcceptAnything()},
-	})
 }
 
 func deckhouseVersion() (string, error) {
