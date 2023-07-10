@@ -15,7 +15,7 @@ shell:
 docker:
   ENV:
     container: docker
-  ENTRYPOINT: ["/usr/local/bin/aws-cloud-controller-manager"]
+  ENTRYPOINT: ["/cluster-autoscaler"]
 ---
 artifact: {{ $.ModuleName }}/{{ $.ImageName }}-artifact-{{ $version | replace "." "-" }}
     {{- if semverCompare ">=1.25" $version }}
