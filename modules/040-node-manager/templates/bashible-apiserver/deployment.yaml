@@ -76,7 +76,6 @@ spec:
           - "--bind-address=$(HOST_IP)"
           - "--cert-dir=/var/certs"
           - "--secure-port=10423"
-          - "--v=2"
         env:
         - name: HOST_IP
           valueFrom:
@@ -179,4 +178,3 @@ data:
     {{- .Files.Get "candi/version_map.yml" | nindent 4 }}
   images_digests.json: |-
     {{- .Files.Get "images_digests.json" | nindent 4 }}
-
