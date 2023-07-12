@@ -21,12 +21,14 @@ import (
 	"github.com/containers/image/v5/types"
 )
 
+type CopyOption func(*copyOptions)
+
+type ListOption func(*listOptions)
+
 type copyOptions struct {
 	copyOptions *copy.Options
 	dryRun      bool
 }
-
-type CopyOption func(*copyOptions)
 
 func WithPreserveDigests() CopyOption {
 	return func(o *copyOptions) {
@@ -82,5 +84,30 @@ func withDestAuth(cfg *types.DockerAuthConfig) CopyOption {
 func WithDryRun() CopyOption {
 	return func(o *copyOptions) {
 		o.dryRun = true
+	}
+}
+
+type listOptions struct {
+	sysCtx *types.SystemContext
+}
+
+func withAuth(cfg *types.DockerAuthConfig) ListOption {
+	return func(lo *listOptions) {
+		if cfg == nil {
+			return
+		}
+		if lo.sysCtx == nil {
+			lo.sysCtx = &types.SystemContext{}
+		}
+		lo.sysCtx.DockerAuthConfig = cfg
+	}
+}
+
+func WithInsecure() ListOption {
+	return func(lo *listOptions) {
+		if lo.sysCtx == nil {
+			lo.sysCtx = &types.SystemContext{}
+		}
+		lo.sysCtx.DockerInsecureSkipTLSVerify = types.OptionalBoolTrue
 	}
 }

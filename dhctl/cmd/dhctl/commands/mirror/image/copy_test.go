@@ -16,6 +16,10 @@ package image_test
 
 import (
 	"context"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/deckhouse/deckhouse/dhctl/cmd/dhctl/commands/mirror/image"
@@ -27,7 +31,7 @@ func TestCopyImage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	localDir, err := image.NewRegistry("test/deckhouse/dir", nil)
+	localDir, err := image.NewRegistry("dir:test/copy/dir", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,23 +49,59 @@ func TestCopyImage(t *testing.T) {
 		opts []image.CopyOption
 	}
 	tests := []struct {
-		name    string
-		args    args
-		wantErr bool
+		name     string
+		args     args
+		wantErr  error
+		checkDir string
 	}{
 		{
-			name: "copy trivy-db from deckhouse registry to local dir by tag",
+			name: "copy release-channel:alpha from deckhouse registry to local dir by tag",
 			args: args{
 				ctx:  context.Background(),
 				src:  image.NewImageConfig(deckhouseRegistry, "alpha", "", "release-channel"),
 				dest: image.NewImageConfig(localDir, "alpha", "", "release-channel"),
+				opts: []image.CopyOption{image.WithOutput(io.Discard)},
+			},
+			checkDir: filepath.Join(localDir.Path(), "release-channel", "alpha"),
+		},
+
+		{
+			name: "dryRun copy from deckhouse registry to deckhouse registry by sha",
+			args: args{
+				ctx:  context.Background(),
+				src:  image.NewImageConfig(deckhouseRegistry, "test-tag", "sha256:79ecc9578e5d18a524f5fecc9e5eb82231191d4deafd27e51bed212f9da336d4"),
+				dest: image.NewImageConfig(deckhouseRegistry, "copy-test-tag", ""),
+				opts: []image.CopyOption{image.WithOutput(io.Discard), image.WithDryRun()},
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := image.CopyImage(tt.args.ctx, tt.args.src, tt.args.dest, policyContext, tt.args.opts...); (err != nil) != tt.wantErr {
+			defer os.RemoveAll(tt.checkDir)
+			if err := image.CopyImage(tt.args.ctx, tt.args.src, tt.args.dest, policyContext, tt.args.opts...); !errors.Is(err, tt.wantErr) {
 				t.Errorf("CopyImage() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if tt.checkDir == "" {
+				return
+			}
+
+			dirInfo, err := os.Stat(tt.checkDir)
+			if err != nil {
+				t.Errorf("CopyImage() error = path error for dir %s: %v", tt.checkDir, err)
+				return
+			}
+
+			if !dirInfo.IsDir() {
+				t.Errorf("CopyImage() error = path is not a dir: %v", tt.checkDir)
+				return
+			}
+
+			for _, f := range []string{"version", "manifest.json"} {
+				if _, err := os.Stat(filepath.Join(tt.checkDir, f)); err != nil {
+					t.Errorf("CopyImage() error = %s path error for %s: %v", f, tt.checkDir, err)
+				}
 			}
 		})
 	}

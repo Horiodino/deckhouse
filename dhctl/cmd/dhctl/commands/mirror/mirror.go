@@ -24,16 +24,20 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/containers/image/v5/signature"
 	"github.com/containers/image/v5/types"
 	"github.com/deckhouse/deckhouse/dhctl/cmd/dhctl/commands/mirror/image"
+	"github.com/deckhouse/deckhouse/dhctl/cmd/dhctl/commands/mirror/versions"
 	"github.com/deckhouse/deckhouse/dhctl/pkg/app"
 	"github.com/deckhouse/deckhouse/dhctl/pkg/log"
 	"gopkg.in/alecthomas/kingpin.v2"
@@ -41,92 +45,153 @@ import (
 
 const (
 	eeEdition = "ee"
-	ceEdition = "ce"
 
-	destinationHelp = "destination for images to write (directory: 'dir:<directory>' or registry: 'docker://<registry repositroy')."
-	sourceHelp      = "source for deckhouse images ('dir://<directory>')."
+	destinationHelp = `destination for images to write (archive file: "file:<file path>.tar.gz" or registry: "docker://<registry repositroy").`
+	sourceHelp      = `source for deckhouse images (archive file: "file:<file path>.tar.gz" or registry: "docker://<registry repositroy").`
+
+	registryRegexp = "^(file:.+\\.tar\\.gz|docker://.+)$"
+
+	releaseChannelRepo = "release-channel"
+	versionRE          = `(v[0-9]+\.[0-9]+)\.[0-9]+`
 )
 
 var (
 	releaseChannels = [5]string{"alpha", "beta", "early-access", "stable", "rock-solid"}
+
+	ErrLatestLowerThanMin = errors.New("latest version can't be lower than min version")
+	ErrEditionNotEE       = errors.New("dhctl mirror can be used only in EE deckhouse edition")
+	ErrNoLicense          = errors.New("license is required to download Deckhouse Enterprise Edition. Please provide it with CLI argument --license")
+
+	versionLatestRE = fmt.Sprintf(`^(%s|latest)$`, versionRE)
+	versionsRegexp  = regexp.MustCompile(`^` + versionRE + `$`)
 )
 
 func DefineMirrorCommand(kpApp *kingpin.Application) *kingpin.CmdClause {
 	var (
+		minVersion = app.NewStringWithRegexpValidation(versionLatestRE)
+
+		source       = app.NewStringWithRegexpValidation(registryRegexp)
 		licenseToken string
 
-		destination         = app.NewStringWithRegexpValidation("(dir:|docker://).+")
-		source              = app.NewStringWithRegexpValidation("(dir:|docker://).+")
+		destination         = app.NewStringWithRegexpValidation(registryRegexp)
 		destinationUser     string
 		destinationPassword string
 		destinationInsecure bool
 		dryRun              bool
 	)
 
-	cmd := kpApp.Command("mirror", "Copy images from deckhouse registry or fs directory to specified registry or fs directory.")
+	cmd := kpApp.Command("mirror", "Copy images from deckhouse registry or tar.gz file to specified registry or tar.gz file.")
 
 	cmd.Arg("DESTINATION", destinationHelp).Required().SetValue(destination)
 	cmd.Flag("from", sourceHelp).Default("docker://registry.deckhouse.io/deckhouse").SetValue(source)
 
 	cmd.Flag("dry-run", "Run without actually copying data.").BoolVar(&dryRun)
+	cmd.Flag("min-version", `The oldest version of deckhouse from your clusters or "latest" for clean installation.`).SetValue(minVersion)
 
 	// Deckhouse registry flags
-	cmd.Flag("license", "License key for Deckhouse registry.").StringVar(&licenseToken)
+	cmd.Flag("license", "License key for Deckhouse registry.").Required().StringVar(&licenseToken)
 
 	// Destination registry flags
 	cmd.Flag("username", "Username for the destination registry.").StringVar(&destinationUser)
 	cmd.Flag("password", "Password for the destination registry.").StringVar(&destinationPassword)
-	cmd.Flag("insecure", "Use http instead of https while connecting to registry.").BoolVar(&destinationInsecure)
+	cmd.Flag("insecure", "Use http instead of https while connecting to destination registry.").BoolVar(&destinationInsecure)
 
 	runFunc := func() error {
 		ctx := context.Background()
-
-		version, err := deckhouseVersion()
-		if err != nil {
-			return err
-		}
 
 		edition, err := deckhouseEdition()
 		if err != nil {
 			return err
 		}
 
+		source, err := deckhouseRegistry(source.String(), edition, licenseToken)
+		if err != nil {
+			return err
+		}
+
+		destination, err := newRegistry(destination.String(), registryAuth(destinationUser, destinationPassword))
+		if err != nil {
+			return err
+		}
+
+		destListOptions := make([]image.ListOption, 0)
+		if destinationInsecure {
+			destListOptions = append(destListOptions, image.WithInsecure())
+		}
+
+		versions, err := versionsToCopy(ctx, source, destination, minVersion.String(), destListOptions...)
+		if err != nil {
+			return err
+		}
+		fmt.Println(versions)
+		// latestVersion, err := deckhouseLatestVersion(ctx, source)
+		// if err != nil {
+		// 	return err
+		// }
+
+		// minVersion, err := deckhouseMinVersion(latestVersion, minVersion.String())
+		// if err != nil {
+		// 	return err
+		// }
+
+		// versions, err := deckhouseVersions(minVersion, latestVersion)
+		// if err != nil {
+		// 	return err
+		// }
+
+		// fmt.Println(versions)
+
+		// fmt.Println(edition)
+
+		// fmt.Println(source, destination)
+
+		// listOptions := make([]image.ListOption, 0)
+		// if destinationInsecure {
+		// 	listOptions = append(listOptions, image.WithInsecure())
+		// }
+
+		// allVersions, err := excludeDestinationVersions(ctx, destination, versions, listOptions...)
+		// if err != nil {
+		// 	return err
+		// }
+		// fmt.Println(allVersions)
+
 		policyContext, err := image.NewPolicyContext()
 		if err != nil {
-			return nil
+			return err
 		}
 		defer policyContext.Destroy()
 
-		copyOpts := []image.CopyOption{
-			image.WithCopyAllImages(),
-			image.WithPreserveDigests(),
-			image.WithOutput(log.GetDefaultLogger()),
-		}
+		// copyOpts := []image.CopyOption{
+		// 	image.WithCopyAllImages(),
+		// 	image.WithPreserveDigests(),
+		// 	image.WithOutput(log.GetDefaultLogger()),
+		// }
 
-		if destinationInsecure {
-			copyOpts = append(copyOpts, image.WithDestInsecure())
-		}
+		// if destinationInsecure {
+		// 	copyOpts = append(copyOpts, image.WithDestInsecure())
+		// }
 
-		images, err := deckhouseImages(ctx, source.String(), edition, version, licenseToken, policyContext, copyOpts...)
-		if err != nil {
-			return err
-		}
+		// images, err := deckhouseImages(ctx, source.String(), edition, version, licenseToken, policyContext, copyOpts...)
+		// if err != nil {
+		// 	return err
+		// }
 
-		destRegistry, err := image.NewRegistry(destination.String(), registryAuth(destinationUser, destinationPassword))
-		if err != nil {
-			return err
-		}
+		// destRegistry, err := image.NewRegistry(destination.String(), registryAuth(destinationUser, destinationPassword))
+		// if err != nil {
+		// 	return err
+		// }
 
-		if dryRun {
-			copyOpts = append(copyOpts, image.WithDryRun())
-		}
+		// if dryRun {
+		// 	copyOpts = append(copyOpts, image.WithDryRun())
+		// }
 
-		// Copy images
-		for _, srcImage := range images {
-			if err := copyImage(ctx, srcImage, destRegistry, policyContext, copyOpts...); err != nil {
-				return err
-			}
-		}
+		// // Copy images
+		// for _, srcImage := range images {
+		// 	if err := copyImage(ctx, srcImage, destRegistry, policyContext, copyOpts...); err != nil {
+		// 		return err
+		// 	}
+		// }
 		return nil
 	}
 
@@ -136,41 +201,165 @@ func DefineMirrorCommand(kpApp *kingpin.Application) *kingpin.CmdClause {
 	return cmd
 }
 
-func deckhouseVersion() (string, error) {
-	content, err := os.ReadFile("/deckhouse/version")
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(content)), nil
-}
-
 func deckhouseEdition() (string, error) {
 	content, err := os.ReadFile("/deckhouse/edition")
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(content)), nil
+
+	edition := strings.TrimSpace(string(content))
+	if edition != eeEdition {
+		return "", ErrEditionNotEE
+	}
+
+	return edition, nil
 }
 
-func deckhouseImages(ctx context.Context, source, edition, version, licenseToken string, policyContext *signature.PolicyContext, opts ...image.CopyOption) ([]*image.ImageConfig, error) {
-	registry, err := image.NewRegistry(source, nil)
+func deckhouseRegistry(deckhouseRegistry, edtiton, licenseToken string) (*image.RegistryConfig, error) {
+	registry, err := newRegistry(deckhouseRegistry, nil)
 	if err != nil {
 		return nil, err
 	}
-	switch registry.RegistryTransport() {
-	case image.DockerTransport:
-		return registryImages(ctx, registry, edition, version, licenseToken, policyContext, opts...)
-	case image.DirTransport:
-		return directoryImages(registry)
+
+	if registry.Transport() != image.DockerTransport {
+		return registry, nil
 	}
-	return nil, fmt.Errorf("no such transport for source: %s", registry.RegistryTransport())
+
+	auth, err := deckhouseRegistryAuth(edtiton, licenseToken)
+	if err != nil {
+		return nil, err
+	}
+
+	u, err := url.Parse(deckhouseRegistry)
+	if err != nil {
+		return nil, err
+	}
+	u.Path = filepath.Join(u.Path, edtiton)
+	return newRegistry(u.String(), auth)
 }
+
+func deckhouseRegistryAuth(edition, licenseToken string) (*types.DockerAuthConfig, error) {
+	if licenseToken == "" {
+		return nil, ErrNoLicense
+	}
+	return registryAuth("license-token", licenseToken), nil
+}
+
+func newRegistry(registryWithTransport string, auth *types.DockerAuthConfig) (*image.RegistryConfig, error) {
+	return image.NewRegistry(registryWithTransport, auth)
+}
+
+func registryAuth(username, password string) *types.DockerAuthConfig {
+	if username == "" || password == "" {
+		return nil
+	}
+
+	return &types.DockerAuthConfig{
+		Username: username,
+		Password: password,
+	}
+}
+
+func versionsToCopy(ctx context.Context, source, dest *image.RegistryConfig, minVersion string, destListOpts ...image.ListOption) (versions.LatestVersions, error) {
+	sourceVersions, err := findDeckhouseVersions(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+
+	destVersions := make(versions.LatestVersions)
+	if dest.Transport() == image.DockerTransport {
+		var err error
+		destVersions, err = findDeckhouseVersions(ctx, dest, destListOpts...)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if len(destVersions) < 1 || dest.Transport() != image.DockerTransport {
+		minVersion, err := deckhouseMinVersion(sourceVersions, minVersion)
+		if err != nil {
+			return nil, fmt.Errorf("min version: %w", err)
+		}
+		if _, err := destVersions.SetString(minVersion.String()); err != nil {
+			return nil, err
+		}
+	}
+
+	return compareDeckhouseVersions(sourceVersions, destVersions)
+}
+
+func findDeckhouseVersions(ctx context.Context, registry *image.RegistryConfig, opts ...image.ListOption) (versions.LatestVersions, error) {
+	tags, err := registry.ListTags(ctx, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	versions := make(versions.LatestVersions)
+	for _, tag := range tags {
+		if !versionsRegexp.MatchString(tag) {
+			continue
+		}
+
+		if _, err := versions.SetString(tag); err != nil {
+			return nil, err
+		}
+	}
+	return versions, nil
+}
+
+func deckhouseMinVersion(sourceVersions versions.LatestVersions, minVersion string) (*semver.Version, error) {
+	latestWithPatch := sourceVersions.Latest()
+	switch minVersion {
+	case "":
+		version := versions.ParseFromInt(latestWithPatch.Major(), latestWithPatch.Minor()-5, 0)
+		return sourceVersions.Get(*version)
+	case "latest":
+		return latestWithPatch, nil
+	}
+	return sourceVersions.GetString(minVersion)
+}
+
+func compareDeckhouseVersions(sourceVersions, destVersions versions.LatestVersions) (versions.LatestVersions, error) {
+	sourceLatestWithPatch, destOldestWithPatch := sourceVersions.Latest(), destVersions.Oldest()
+	resultVersions := make(versions.LatestVersions)
+	for version := *versions.ParseFromInt(destOldestWithPatch.Major(), destOldestWithPatch.Minor(), 0); !version.GreaterThan(sourceLatestWithPatch); version = version.IncMinor() {
+		sourceVersion, err := sourceVersions.Get(version)
+		if err != nil {
+			return nil, fmt.Errorf("version %s from source: %w", version, err)
+		}
+
+		destVersion, err := destVersions.Get(version)
+		switch {
+		case (err == nil && !destVersion.Equal(sourceVersion)) || errors.Is(err, versions.ErrNoVersion):
+			if _, err := resultVersions.Set(*sourceVersion); err != nil {
+				return nil, err
+			}
+		case err != nil:
+			return nil, fmt.Errorf("version %s from destination: %w", version, err)
+		}
+	}
+	return resultVersions, nil
+}
+
+// func generateImagesList(source, destination *image.RegistryConfig, versions []semver.Version) ([]*image.ImageConfig, error) {
+// 	var sourceImages []*image.ImageConfig
+// 	switch source.Transport() {
+// 	case image.DockerTransport:
+// 	case image.FileTransport:
+// 	}
+
+// 	switch source.Transport() {
+// 	case image.DockerTransport:
+// 	case image.FileTransport:
+// 	}
+// 	return nil, nil
+// }
 
 // directoryImages generates list to pull from local directory
 func directoryImages(registry *image.RegistryConfig) ([]*image.ImageConfig, error) {
 	imageDigests := make([]*image.ImageConfig, 0)
 
-	err := filepath.WalkDir(registry.RegistryPath(), func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(registry.Path(), func(path string, d fs.DirEntry, err error) error {
 		// All copied to dir images have this file
 		if err != nil || d.IsDir() || d.Name() != "manifest.json" {
 			return err
@@ -206,11 +395,7 @@ func registryImages(ctx context.Context, registry *image.RegistryConfig, edition
 	}
 
 	images := make([]*image.ImageConfig, 0, 3+len(imagesDigests)+len(releaseChannels)*3)
-	images = append(images, newImage(version, ""), newImage(version, "", "install"))
-
-	if edition != ceEdition {
-		images = append(images, newImage("2", "", "security", "trivy-db"))
-	}
+	images = append(images, newImage(version, ""), newImage(version, "", "install"), newImage("2", "", "security", "trivy-db"))
 
 	for _, release := range releaseChannels {
 		// Check that release-channel image has similar version as used for running dhctl image
@@ -252,29 +437,6 @@ func registryModulesImages() (map[string]string, error) {
 		}
 	}
 	return imageDigests, nil
-}
-
-func deckhouseRegistryAuth(edition, licenseToken string) (*types.DockerAuthConfig, error) {
-	if edition != ceEdition && licenseToken == "" {
-		return nil, errors.New("license is required to download Deckhouse Enterprise Edition. Please provide it with CLI argument --license")
-	}
-
-	if edition == ceEdition {
-		return nil, nil
-	}
-
-	return registryAuth("license-token", licenseToken), nil
-}
-
-func registryAuth(username, password string) *types.DockerAuthConfig {
-	if username == "" || password == "" {
-		return nil
-	}
-
-	return &types.DockerAuthConfig{
-		Username: username,
-		Password: password,
-	}
 }
 
 // fetchReleaseMetadataDeckhouseVersion copies image to local directory and untar it's layers to find version.json and
@@ -320,7 +482,7 @@ func fetchReleaseMetadataDeckhouseVersion(ctx context.Context, img *image.ImageC
 		}
 		return meta.Version, nil
 	}
-	return "", fmt.Errorf("metadata file not found in image from '%s' dir", dir)
+	return "", fmt.Errorf(`metadata file not found in image from "%s" dir`, dir)
 }
 
 // fileFromGzTarLayer finds finds "targetFile" in "archive" tar.gz file
@@ -376,7 +538,7 @@ func destinationImage(destRegistry *image.RegistryConfig, srcImage *image.ImageC
 	// https://github.com/containers/image/blob/v5.26.1/docker/docker_transport.go#L80
 	// If image has both tag and digest we want to push it with tag (because digest will be saved)
 	// (because when pushing with digest image becames dangling in the registry)
-	if destRegistry.RegistryTransport() == image.DockerTransport && srcImage.Tag() != "" {
+	if destRegistry.Path() == image.DockerTransport && srcImage.Tag() != "" {
 		return destImage.WithDigest("")
 	}
 	return destImage
