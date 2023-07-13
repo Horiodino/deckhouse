@@ -51,7 +51,7 @@ func CopyImage(ctx context.Context, src, dest *ImageConfig, policyContext *signa
 	if copyOptions.dryRun {
 		return nil
 	}
-
+	// srcRef.NewImage()
 	_, err = copy.Image(ctx, policyContext, destRef, srcRef, copyOptions.copyOptions)
 	return err
 }

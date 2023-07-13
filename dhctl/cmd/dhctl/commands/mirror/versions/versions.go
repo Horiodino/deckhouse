@@ -12,25 +12,30 @@ var (
 	ErrNoVersion = errors.New("no such version")
 )
 
-func Parse(v string) (*semver.Version, error) {
+func parse(v string) (*semver.Version, error) {
 	return semver.NewVersion(v)
 }
 
-func ParseFromInt(major, minor, patch uint64) *semver.Version {
-	return versionFromInt(major, minor, patch)
+func parseFromInt(major, minor, patch uint64) *semver.Version {
+	version := fmt.Sprintf("v%d.%d", major, minor)
+	if patch > 0 {
+		version = version + "." + strconv.FormatUint(patch, 10)
+	}
+	v, _ := parse(version)
+	return v
 }
 
-type LatestVersions map[semver.Version]semver.Version /* map[<maj>.<min>]max(<maj>.<min>.<patch>) */
+type latestVersions map[semver.Version]semver.Version /* map[<maj>.<min>]max(<maj>.<min>.<patch>) */
 
-func (vs LatestVersions) SetString(v string) (bool, error) {
-	versionWithPatch, err := Parse(v)
+func (vs latestVersions) SetString(v string) (bool, error) {
+	versionWithPatch, err := parse(v)
 	if err != nil {
 		return false, err
 	}
 	return vs.Set(*versionWithPatch)
 }
 
-func (vs LatestVersions) Set(new semver.Version) (bool, error) {
+func (vs latestVersions) Set(new semver.Version) (bool, error) {
 	old, err := vs.Get(new)
 	switch {
 	case errors.Is(err, ErrNoVersion):
@@ -44,15 +49,15 @@ func (vs LatestVersions) Set(new semver.Version) (bool, error) {
 	return true, nil
 }
 
-func (vs LatestVersions) GetString(v string) (*semver.Version, error) {
-	key, err := Parse(v)
+func (vs latestVersions) GetString(v string) (*semver.Version, error) {
+	key, err := parse(v)
 	if err != nil {
 		return nil, err
 	}
 	return vs.Get(*key)
 }
 
-func (vs LatestVersions) Get(key semver.Version) (*semver.Version, error) {
+func (vs latestVersions) Get(key semver.Version) (*semver.Version, error) {
 	v, ok := vs[prepareKey(key)]
 	if !ok {
 		return nil, ErrNoVersion
@@ -60,7 +65,7 @@ func (vs LatestVersions) Get(key semver.Version) (*semver.Version, error) {
 	return &v, nil
 }
 
-func (vs LatestVersions) Latest() *semver.Version {
+func (vs latestVersions) Latest() *semver.Version {
 	var maxValue semver.Version
 	for _, value := range vs {
 		if value.GreaterThan(&maxValue) {
@@ -70,8 +75,8 @@ func (vs LatestVersions) Latest() *semver.Version {
 	return &maxValue
 }
 
-func (vs LatestVersions) Oldest() *semver.Version {
-	minValue := *versionFromInt(100000, 0, 0)
+func (vs latestVersions) Oldest() *semver.Version {
+	minValue := *parseFromInt(100000, 0, 0)
 	for _, value := range vs {
 		if minValue.GreaterThan(&value) {
 			minValue = value
@@ -81,14 +86,5 @@ func (vs LatestVersions) Oldest() *semver.Version {
 }
 
 func prepareKey(key semver.Version) semver.Version {
-	return *versionFromInt(key.Major(), key.Minor(), 0)
-}
-
-func versionFromInt(major, minor, patch uint64) *semver.Version {
-	version := fmt.Sprintf("v%d.%d", major, minor)
-	if patch > 0 {
-		version = version + "." + strconv.FormatUint(patch, 10)
-	}
-	v, _ := semver.NewVersion(version)
-	return v
+	return *parseFromInt(key.Major(), key.Minor(), 0)
 }

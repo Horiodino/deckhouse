@@ -31,7 +31,7 @@ func TestCopyImage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	localDir, err := image.NewRegistry("dir:test/copy/dir", nil)
+	localFile, err := image.NewRegistry("file:test/copy/file.tar.gz", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,10 +59,10 @@ func TestCopyImage(t *testing.T) {
 			args: args{
 				ctx:  context.Background(),
 				src:  image.NewImageConfig(deckhouseRegistry, "alpha", "", "release-channel"),
-				dest: image.NewImageConfig(localDir, "alpha", "", "release-channel"),
+				dest: image.NewImageConfig(localFile, "alpha", "", "release-channel"),
 				opts: []image.CopyOption{image.WithOutput(io.Discard)},
 			},
-			checkDir: filepath.Join(localDir.Path(), "release-channel", "alpha"),
+			checkDir: filepath.Join(localFile.Path(), "release-channel", "alpha"),
 		},
 
 		{
@@ -93,8 +93,8 @@ func TestCopyImage(t *testing.T) {
 				return
 			}
 
-			if !dirInfo.IsDir() {
-				t.Errorf("CopyImage() error = path is not a dir: %v", tt.checkDir)
+			if dirInfo.IsDir() {
+				t.Errorf("CopyImage() error = path is a dir: %v", tt.checkDir)
 				return
 			}
 

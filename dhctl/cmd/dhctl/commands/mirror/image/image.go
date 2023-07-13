@@ -84,7 +84,7 @@ func (i *ImageConfig) imageReference() (types.ImageReference, error) {
 			imageBuilder.WriteString(i.tag)
 		}
 
-	case FileTransport:
+	case fileTransport:
 		p := filepath.Join(i.RegistryPath(), i.tag)
 		if err := os.MkdirAll(p, 0o755); err != nil {
 			return nil, err

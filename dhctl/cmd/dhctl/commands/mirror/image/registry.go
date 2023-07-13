@@ -26,13 +26,14 @@ import (
 	"github.com/containers/image/v5/directory"
 	"github.com/containers/image/v5/docker"
 	"github.com/containers/image/v5/types"
+	"github.com/deckhouse/deckhouse/dhctl/cmd/dhctl/commands/mirror/image/transport"
 )
 
 var (
-	DockerTransport = docker.Transport.Name()
-	FileTransport   = directory.Transport.Name()
-
-	ErrNoSuchRegistryTransport = errors.New("no such transport for images. should be 'file:path' or 'docker://docker-reference'")
+	DockerTransport            = docker.Transport.Name()
+	fileTransport              = transport.Transport.Name()
+	directoryTransport         = directory.Transport.Name()
+	ErrNoSuchRegistryTransport = errors.New("no such transport for images. should be 'file:path', 'docker://docker-reference' or 'dir:path'")
 )
 
 type RegistryConfig struct {
@@ -50,15 +51,12 @@ func MustNewRegistry(registryPath string, dockerCfg *types.DockerAuthConfig) *Re
 }
 
 func NewRegistry(registryPath string, dockerCfg *types.DockerAuthConfig) (*RegistryConfig, error) {
-	transportName, withinTransport, f := strings.Cut(registryPath, ":")
+	transportName, withinTransport, f := strings.Cut(transport.TrimExt(registryPath), ":")
 	if !f {
 		return nil, fmt.Errorf("can't find transport for '%s'", registryPath)
 	}
-	if transportName == "file" {
-		transportName = "dir"
-	}
 
-	if transportName != DockerTransport && transportName != FileTransport {
+	if transportName != DockerTransport && transportName != fileTransport && transportName != directoryTransport {
 		return nil, ErrNoSuchRegistryTransport
 	}
 
@@ -107,7 +105,7 @@ func (r *RegistryConfig) ListTags(ctx context.Context, opts ...ListOption) ([]st
 			opt(listOpts)
 		}
 		return docker.GetRepositoryTags(ctx, listOpts.sysCtx, imgRef)
-	case FileTransport:
+	case directoryTransport:
 		return listDirTags(r.Path())
 	}
 	return nil, ErrNoSuchRegistryTransport
