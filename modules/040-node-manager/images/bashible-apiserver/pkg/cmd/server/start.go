@@ -109,8 +109,6 @@ func (o *BashibleServerOptions) Config() (*apiserver.Config, error) {
 		openapi.NewDefinitionNamer(apiserver.Scheme))
 	serverConfig.OpenAPIV3Config.Info.Title = "Bashible"
 	serverConfig.OpenAPIV3Config.Info.Version = "0.1"
-	// FIXME
-	o.RecommendedOptions.Authorization = nil
 	if err := o.RecommendedOptions.ApplyTo(serverConfig); err != nil {
 		return nil, err
 	}
