@@ -27,4 +27,4 @@ git:
   - url: https://github.com/LINBIT/drbd/
     add: /
     to: /
-    tag: drbd-9.2.4
+    tag: drbd-{{ $version }}
