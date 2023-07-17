@@ -370,6 +370,7 @@ var DefaultImagesDigests = map[string]interface{}{
 		"dockerUbuntu519031330UbuntuBionic":   "imageHash-registrypackages-dockerUbuntu519031330UbuntuBionic",
 		"dockerUbuntu519031330UbuntuFocal":    "imageHash-registrypackages-dockerUbuntu519031330UbuntuFocal",
 		"dockerUbuntu520101430UbuntuJammy":    "imageHash-registrypackages-dockerUbuntu520101430UbuntuJammy",
+		"drbd924":                             "imageHash-registrypackages-drbd924",
 		"inotifyToolsCentos73149":             "imageHash-registrypackages-inotifyToolsCentos73149",
 		"inotifyToolsCentos831419":            "imageHash-registrypackages-inotifyToolsCentos831419",
 		"inotifyToolsCentos9322101":           "imageHash-registrypackages-inotifyToolsCentos9322101",
