@@ -24,9 +24,6 @@ from: {{ $.Images.BASE_ALPINE }}
 git:
   - add: /modules/007-{{ $.ModuleName }}/images/{{ $.ImageName }}/scripts
     to: /
-    stageDependencies:
-      setup:
-        - '**/*'
   - url: https://github.com/LINBIT/drbd/
     add: /
     to: /
