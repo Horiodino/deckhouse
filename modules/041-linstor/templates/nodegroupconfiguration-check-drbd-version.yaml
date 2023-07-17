@@ -22,7 +22,7 @@ spec:
     # See the License for the specific language governing permissions and
     # limitations under the License.
 
-    bb-rp-install "jq:{{ .Values.global.modulesImages.digests.registrypackages.drbd924 }}"
+    bb-rp-install "drbd924:{{ .Values.global.modulesImages.digests.registrypackages.drbd924 }}"
 
     cd /opt/deckhouse/drbd
     make install
