@@ -4,6 +4,23 @@
 image: {{ $.ModuleName }}/{{ $.ImageName }}-{{ $image_version }}
 from: {{ $.Images.BASE_SCRATCH }}
 
+import:
+  - artifact: {{ $.ModuleName }}/{{ $.ImageName }}-artifact-{{ $image_version }}
+    add: /
+    to: /
+    includePaths:
+      - drbd
+      - install
+    before: setup
+docker:
+  LABEL:
+    distro: all
+    version: all
+    drbd: {{ $version }}
+---
+artifact: {{ $.ModuleName }}/{{ $.ImageName }}-artifact-{{ $image_version }}
+from: {{ $.Images.BASE_ALPINE }}
+
 git:
 - url: https://github.com/LINBIT/drbd/
   add: /
